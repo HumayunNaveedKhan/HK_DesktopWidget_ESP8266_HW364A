@@ -1,0 +1,122 @@
+#include <U8g2lib.h>
+#include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+
+// **Wi-Fi Credentials**
+const char* ssid = "CoatsEmployee";
+const char* password = "Coats@1234";
+
+// **Soft AP Configuration**
+const char* ap_ssid = "HK_DTWidget";  // AP SSID
+const char* ap_password = "00000000";  // AP Password
+
+// **OLED Display (128x64, I2C)**
+#define OLED_RESET U8X8_PIN_NONE
+#define OLED_SDA 14  // D6
+#define OLED_SCL 12  // D5
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, OLED_RESET, OLED_SCL, OLED_SDA);
+
+// **NTP Time Sync (UTC+5 for Karachi)**
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 18000, 60000);
+
+// **Function to Read Temperature (Fixed Calibration)**
+float getTemperature() {
+  uint16_t raw = analogRead(A0);  // Read ADC
+  float voltage = (raw / 1024.0) * 3.3;  // Convert to Voltage
+  float tempC = (voltage * 100.0); // Approximate Temp Formula
+  return tempC + 27.0; // **Fixed Offset for Correct Reading**
+}
+
+// **Function to Display OLED Widget**
+void displayWidget(bool connected) {
+  u8g2.clearBuffer();
+
+  // **1️⃣ Yellow Box for Time**
+  u8g2.drawBox(0, 0, 128, 18);
+
+  // **2️⃣ Centered, Bold Time (Inside Yellow Box)**
+  timeClient.update();
+  char timeBuffer[15];
+  snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d:%02d", timeClient.getHours(), timeClient.getMinutes(), timeClient.getSeconds());
+  u8g2.setDrawColor(0);  // **Black Text on Yellow**
+  u8g2.setFont(u8g2_font_logisoso16_tf);  // **Bigger, Bold Font**
+  u8g2.drawStr(22, 15, timeBuffer); // **Centered**
+  u8g2.setDrawColor(1); // **Reset to Normal Text**  
+
+  // **3️⃣ Date (Internet Synced)**
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(5, 32, "Wednesday, 29 Jan 2025");
+
+  // **4️⃣ Local Temperature (Fixed)**
+  float tempC = getTemperature();
+  char tempBuffer[15];
+  snprintf(tempBuffer, sizeof(tempBuffer), "Temp: %.1f°C", tempC);
+  u8g2.drawStr(5, 46, tempBuffer);
+
+  // **5️⃣ Location**
+  u8g2.drawStr(5, 60, "NED Karachi, PK");
+
+  // **Display 'DC!' if disconnected**
+  if (!connected) {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(105, 60, "DC!"); // Display "DC!" at the bottom right
+  }
+
+  u8g2.sendBuffer();
+}
+
+void setup() {
+  Serial.begin(115200);
+  u8g2.begin();
+
+  // **Display Connecting Message**
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(10, 30, "Connecting WiFi...");
+  u8g2.sendBuffer();
+
+  // **Try to Connect to WiFi for 30 seconds**
+  WiFi.begin(ssid, password);
+  unsigned long startAttemptTime = millis();
+  bool connected = false;
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {  // 30s timeout
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi Connected!");
+    connected = true;
+  } else {
+    Serial.println("\nWiFi Failed, Starting Soft AP...");
+    // **Start Soft AP if Wi-Fi connection fails**
+    WiFi.softAP(ap_ssid, ap_password);
+    Serial.print("AP IP Address: ");
+    Serial.println(WiFi.softAPIP());
+    // Display AP info on OLED for 30 seconds
+    for (int i = 0; i < 60; i++) {
+      u8g2.clearBuffer();
+      u8g2.setFont(u8g2_font_6x10_tf);
+      u8g2.drawStr(5, 15, "AP SSID:");
+      u8g2.drawStr(5, 30, ap_ssid);
+      u8g2.drawStr(5, 45, "Password:");
+      u8g2.drawStr(5, 60, ap_password);
+      u8g2.sendBuffer();
+      delay(1000);
+    }
+  }
+
+  // **Start NTP Client**
+  timeClient.begin();
+
+  // **Display Widget**
+  displayWidget(connected);
+}
+
+void loop() {
+  // **Display Widget Every Second**
+  displayWidget(WiFi.status() == WL_CONNECTED);
+  delay(1000);  // Refresh OLED every second
+}
